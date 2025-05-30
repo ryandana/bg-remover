@@ -25,12 +25,9 @@ Before we embark on this background-erasing adventure, ensure you have Python in
 **How to Install Python:**
 
 Visit the official Python website and download the latest stable version for your operating system:
+**Currently only Windows OS is supported.**
 
 * **Windows:** Head over to [https://www.python.org/downloads/windows/](https://www.python.org/downloads/windows/) and follow the installation instructions. Make sure to check the box that says "Add Python to PATH" during the installation process for easier access from the command line.
-
-* **macOS:** Python usually comes pre-installed on macOS. However, it's often an older version. We recommend installing the latest version from the official website: [https://www.python.org/downloads/macos/](https://www.python.org/downloads/macos/) or using a package manager like Homebrew (`brew install python`).
-
-* **Linux:** Python is typically included in most Linux distributions. You can usually install or update it using your distribution's package manager (e.g., `sudo apt-get update && sudo apt-get install python3` on Debian/Ubuntu, `sudo yum install python3` on Fedora/CentOS).
 
 **Verify Your Installation:**
 
