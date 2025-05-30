@@ -2,9 +2,9 @@
 import os
 from flask import Flask, request, render_template_string, send_file, jsonify
 from PIL import Image
-from rembg import remove
+from rembg import remove, new_session
 import io
-import uuid # For unique filenames
+import uuid
 import logging
 import webbrowser
 import threading
@@ -20,7 +20,9 @@ PROCESSED_FOLDER = 'processed'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
-# --- HTML Template with Tailwind CSS and JavaScript for Drag & Drop ---
+# Initialize rembg session with default settings (CPU)
+session = new_session(model_name="isnet-general-use")
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -66,7 +68,7 @@ HTML_TEMPLATE = """
 
         <div id="dropZone" class="drop-zone mb-6 cursor-pointer">
             <p class="text-gray-500">Drag & drop an image here, or click to select</p>
-            <input type="file" id="fileInput" class="hidden" accept="image/png, image/jpeg, image/gif, image/bmp, image/tiff">
+            <input type="file" id="fileInput" class="hidden" multiple accept="image/png, image/jpeg, image/gif, image/bmp, image/tiff">
         </div>
         
         <div id="errorMessage" class="text-red-500 text-center mb-4 hidden"></div>
@@ -81,13 +83,13 @@ HTML_TEMPLATE = """
                 <h2 class="text-lg font-semibold text-gray-600 mb-2 text-center sm:text-left">Processed</h2>
                 <img id="processedImage" src="https://placehold.co/300x200/e2e8f0/94a3b8?text=Processed+Image" alt="Processed Image" class="mx-auto sm:mx-0">
             </div>
-                <div class="sm:col-span-2">
+            <div class="sm:col-span-2">
                 <a id="downloadLink" href="#" class="block mt-3 w-full text-center bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-md shadow-md transition duration-150 ease-in-out">
-                Download Image
+                    Download Image
                 </a>
-  </div>
+            </div>
         </div>
-         <p id="statusMessage" class="text-sm text-gray-500 text-center mt-4"></p>
+        <p id="statusMessage" class="text-sm text-gray-500 text-center mt-4"></p>
     </div>
 
     <footer class="text-center text-gray-500 mt-8 text-sm">
@@ -95,127 +97,97 @@ HTML_TEMPLATE = """
     </footer>
 
     <script>
-        const dropZone = document.getElementById('dropZone');
-        const fileInput = document.getElementById('fileInput');
-        const originalImage = document.getElementById('originalImage');
-        const processedImage = document.getElementById('processedImage');
-        const downloadLink = document.getElementById('downloadLink');
-        const loadingSpinner = document.getElementById('loadingSpinner');
-        const errorMessage = document.getElementById('errorMessage');
-        const statusMessage = document.getElementById('statusMessage');
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const originalImage = document.getElementById('originalImage');
+    const processedImage = document.getElementById('processedImage');
+    const loadingSpinner = document.getElementById('loadingSpinner');
+    const errorMessage = document.getElementById('errorMessage');
+    const downloadLink = document.getElementById('downloadLink');
+    const statusMessage = document.getElementById('statusMessage');
 
-        // Handle click on drop zone to trigger file input
-        dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('click', () => fileInput.click());
 
-        // Handle file selection via input
-        fileInput.addEventListener('change', (e) => {
-            const files = e.target.files;
-            if (files.length > 0) {
-                handleFile(files[0]);
-            }
-        });
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
 
-        // Drag and Drop events
-        dropZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropZone.classList.add('dragover');
-        });
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
 
-        dropZone.addEventListener('dragleave', () => {
-            dropZone.classList.remove('dragover');
-        });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) {
+            handleFiles(e.dataTransfer.files);
+        }
+    });
 
-        dropZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dropZone.classList.remove('dragover');
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                handleFile(files[0]);
-            }
-        });
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length) {
+            handleFiles(fileInput.files);
+        }
+    });
 
-        async function handleFile(file) {
-            if (!file.type.startsWith('image/')) {
-                showError('Please upload an image file.');
+    function handleFiles(fileList) {
+        const file = fileList[0]; // Currently process only the first file
+        if (!file) return;
+
+        errorMessage.classList.add('hidden');
+        loadingSpinner.classList.remove('hidden');
+        statusMessage.textContent = '';
+
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            originalImage.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch('/upload', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            loadingSpinner.classList.add('hidden');
+            if (data.error) {
+                errorMessage.textContent = data.error;
+                errorMessage.classList.remove('hidden');
                 return;
             }
-
-            // Display original image preview
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                originalImage.src = e.target.result;
-            }
-            reader.readAsDataURL(file);
-
-            // Prepare form data for upload
-            const formData = new FormData();
-            formData.append('file', file);
-
-            // Reset UI
-            processedImage.src = 'https://placehold.co/300x200/e2e8f0/94a3b8?text=Processing...';
-            downloadLink.classList.add('hidden');
-            loadingSpinner.classList.remove('hidden');
-            errorMessage.classList.add('hidden');
-            statusMessage.textContent = 'Uploading and processing...';
-
-
-            try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ error: 'Server error occurred.' }));
-                    throw new Error(errorData.error || `Server responded with ${response.status}`);
-                }
-
-                const result = await response.json();
-                
-                if (result.processed_image_url) {
-                    // Add a cache-busting query parameter
-                    processedImage.src = result.processed_image_url + '?t=' + new Date().getTime();
-                    downloadLink.href = result.processed_image_url;
-                    downloadLink.download = result.download_filename || 'background_removed.png';
-                    downloadLink.classList.remove('hidden');
-                    statusMessage.textContent = 'Processing complete!';
-                } else if (result.error) {
-                    showError(result.error);
-                    statusMessage.textContent = 'Processing failed.';
-                }
-            } catch (error) {
-                console.error('Upload error:', error);
-                showError('Upload failed: ' + error.message);
-                statusMessage.textContent = 'An error occurred.';
-                processedImage.src = 'https://placehold.co/300x200/e2e8f0/94a3b8?text=Error';
-
-            } finally {
-                loadingSpinner.classList.add('hidden');
-            }
-        }
-        
-        function showError(message) {
-            errorMessage.textContent = message;
+            processedImage.src = data.processed_image_url;
+            downloadLink.href = data.processed_image_url;
+            downloadLink.download = data.download_filename;
+            statusMessage.textContent = 'Image processed successfully!';
+        })
+        .catch(err => {
+            loadingSpinner.classList.add('hidden');
+            errorMessage.textContent = 'An error occurred during upload.';
             errorMessage.classList.remove('hidden');
-            processedImage.src = 'https://placehold.co/300x200/e2e8f0/94a3b8?text=Error';
-        }
-    </script>
+            console.error(err);
+        });
+    }
+</script>
+
 </body>
 </html>
 """
 
 @app.route('/')
 def index():
-    """Serves the main HTML page."""
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """Handles file upload, processes it, and returns the processed image URL."""
     if 'file' not in request.files:
         app.logger.error("No file part in request")
         return jsonify({'error': 'No file part'}), 400
-    
+
     file = request.files['file']
     if file.filename == '':
         app.logger.error("No selected file")
@@ -223,37 +195,34 @@ def upload_file():
 
     if file:
         try:
-            filename = str(uuid.uuid4()) 
+            filename = str(uuid.uuid4())
             original_ext = os.path.splitext(file.filename)[1].lower()
             if original_ext not in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff']:
                 return jsonify({'error': 'Invalid file type. Please upload an image.'}), 400
 
             input_filename = filename + original_ext
-            output_filename = filename + "_no_bg.png" 
+            output_filename = filename + "_no_bg.png"
 
             input_path = os.path.join(UPLOAD_FOLDER, input_filename)
             output_path = os.path.join(PROCESSED_FOLDER, output_filename)
-            
+
             app.logger.info(f"Saving uploaded file to: {input_path}")
             file.save(input_path)
 
             app.logger.info(f"Opening image: {input_path}")
             input_image = Image.open(input_path)
-            
+
             app.logger.info("Removing background...")
-           
-            output_image = remove(input_image)
-            
+            output_image = remove(input_image, session=session)
+
             app.logger.info(f"Saving processed image to: {output_path}")
             output_image.save(output_path)
 
-           
             try:
                 os.remove(input_path)
                 app.logger.info(f"Removed original uploaded file: {input_path}")
             except Exception as e:
                 app.logger.error(f"Error removing original uploaded file {input_path}: {e}")
-
 
             return jsonify({
                 'processed_image_url': f'/processed/{output_filename}',
@@ -263,19 +232,16 @@ def upload_file():
         except Exception as e:
             app.logger.error(f"Error processing file: {e}", exc_info=True)
             return jsonify({'error': f'An error occurred during processing: {str(e)}'}), 500
-    
-    return jsonify({'error': 'Unknown error'}), 500
 
+    return jsonify({'error': 'Unknown error'}), 500
 
 @app.route('/processed/<filename>')
 def send_processed_file(filename):
-    """Serves the processed image."""
     file_path = os.path.join(PROCESSED_FOLDER, filename)
     if not os.path.exists(file_path):
         app.logger.error(f"Processed file not found: {file_path}")
         return "File not found", 404
     return send_file(file_path, mimetype='image/png')
-
 
 def run_app():
     app.run(host='0.0.0.0', port=5000, debug=False)
@@ -301,7 +267,6 @@ if __name__ == '__main__':
         print("Server did not start in time, not opening browser.")
 
     try:
-        # Wait for Flask thread to finish (runs forever unless interrupted)
         flask_thread.join()
     except KeyboardInterrupt:
         print("\nServer shutting down cleanly.")
